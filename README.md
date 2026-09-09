@@ -46,9 +46,10 @@ uv run python benchmark.py data/originals \
 
 ## JPEG AI comparison
 
-Supply command templates matching your JPEG AI implementation. The encoder
-template supports `{input}`, `{output}`, and `{point}`; the decoder supports
-`{input}`, `{output}`, and `{point}`.
+Supply command templates matching your JPEG AI implementation. Both templates
+support `{input}`, `{output}`, `{point}`, and the zero-based `{index}` of each
+point. Use `--jpeg-ai-cwd` when the implementation expects to run from its own
+checkout.
 
 ```bash
 uv run python benchmark.py data/originals \
@@ -56,6 +57,7 @@ uv run python benchmark.py data/originals \
   --jpeg-ai-points 0.25 0.5 1.0 2.0 \
   --jpeg-ai-encoder '/path/to/encoder --input {input} --output {output} --target {point}' \
   --jpeg-ai-decoder '/path/to/decoder --input {input} --output {output}' \
+  --jpeg-ai-cwd /path/to/jpeg-ai-reference-software \
   --jpeg-ai-extension .bin \
   --jpeg-ai-decoded-extension .png \
   --output results/comparison.csv

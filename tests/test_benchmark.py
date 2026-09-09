@@ -65,6 +65,7 @@ class BenchmarkSmokeTest(unittest.TestCase):
             with output.open(newline="", encoding="utf-8") as stream:
                 rows = list(csv.DictReader(stream))
             self.assertEqual({row["codec"] for row in rows}, {"jpeg", "jpeg-ai"})
+            self.assertTrue((root / "artifacts" / "sources" / source.name).is_file())
             for row in rows:
                 self.assertGreater(float(row["bits_per_pixel"]), 0)
                 self.assertGreater(float(row["psnr_db"]), 0)
