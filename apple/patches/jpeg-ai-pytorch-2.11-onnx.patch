@@ -1,0 +1,33 @@
+diff --git a/src/codec/components/contexts/context.py b/src/codec/components/contexts/context.py
+--- a/src/codec/components/contexts/context.py
++++ b/src/codec/components/contexts/context.py
+@@ -81 +81 @@ class Context(nn.Module, ContextUtils):
+-                        export_params = True, opset_version = opset_version,
++                        export_params = True, opset_version = opset_version, dynamo=False,
+diff --git a/src/codec/coding_tools/core_models/CCS_SGMM/common_modules.py b/src/codec/coding_tools/core_models/CCS_SGMM/common_modules.py
+--- a/src/codec/coding_tools/core_models/CCS_SGMM/common_modules.py
++++ b/src/codec/coding_tools/core_models/CCS_SGMM/common_modules.py
+@@ -1013 +1013 @@ class CommonModulesSGMM(ModelEngine):
+-                          export_params = True, opset_version = opset_version,
++                          export_params = True, opset_version = opset_version, dynamo=False,
+@@ -1021 +1021 @@ class CommonModulesSGMM(ModelEngine):
+-                          export_params = True, opset_version = opset_version,
++                          export_params = True, opset_version = opset_version, dynamo=False,
+@@ -1030 +1030 @@ class CommonModulesSGMM(ModelEngine):
+-                            export_params = True, opset_version = opset_version,
++                            export_params = True, opset_version = opset_version, dynamo=False,
+diff --git a/src/codec/coding_tools/core_models/CCS_SGMM/sep_chan_tool.py b/src/codec/coding_tools/core_models/CCS_SGMM/sep_chan_tool.py
+--- a/src/codec/coding_tools/core_models/CCS_SGMM/sep_chan_tool.py
++++ b/src/codec/coding_tools/core_models/CCS_SGMM/sep_chan_tool.py
+@@ -432 +432 @@ class SepChannelsSGMMTool(ModelEngine):
+-                          export_params = True, opset_version = opset_version,
++                          export_params = True, opset_version = opset_version, dynamo=False,
+@@ -439 +439 @@ class SepChannelsSGMMTool(ModelEngine):
+-                          export_params = True, opset_version = opset_version,
++                          export_params = True, opset_version = opset_version, dynamo=False,
+diff --git a/src/codec/coding_tools/filters/eICCI/icci_filter.py b/src/codec/coding_tools/filters/eICCI/icci_filter.py
+--- a/src/codec/coding_tools/filters/eICCI/icci_filter.py
++++ b/src/codec/coding_tools/filters/eICCI/icci_filter.py
+@@ -91 +91 @@ class ICCIFilter(FilterEngine):
+-                          export_params = True, opset_version = opset_version,
++                          export_params = True, opset_version = opset_version, dynamo=False,

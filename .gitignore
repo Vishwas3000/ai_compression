@@ -6,3 +6,5 @@ artifacts/
 data/
 results/
 runs/
+apple/.build/
+apple/Models/

@@ -87,3 +87,10 @@ uv run python -m unittest discover -s tests
 For publishable runs, use a fixed lossless dataset, record the JPEG AI source
 commit and model/checkpoint, keep the same machine and thread settings, and
 report results across multiple operating points.
+
+## Native Apple decoder
+
+[`apple/`](apple/) contains the macOS/iOS decoder work. It currently parses a
+simple-profile codestream, decodes its hyper-latents with native me-tANS, and
+runs converted Core ML decoder stages on Apple Silicon. Full residual-to-image
+reconstruction is still in progress; see [`apple/README.md`](apple/README.md).
