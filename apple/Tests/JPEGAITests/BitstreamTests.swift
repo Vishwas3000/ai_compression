@@ -70,3 +70,13 @@ import Testing
                                        masks: [UInt8](repeating: 1, count: 13))
     #expect(values == [0, 1, -1, 2, -2, 8, -8, 100, -100, 32766, -32767, 0, 3])
 }
+
+@Test func spatialShuffleRoundTripsOddDimensions() {
+    let values = (0 ..< 30).map(Float32.init)
+    let parts = JPEGAIBitstream.downShuffle(values, channels: 2, height: 3, width: 5)
+
+    #expect(JPEGAIBitstream.downShuffle([0, 1, 2, 3], channels: 1, height: 2, width: 2) ==
+        [[0], [3], [1], [2]])
+    #expect(parts.map(\.count) == [12, 12, 12, 12])
+    #expect(JPEGAIBitstream.upShuffle(parts, channels: 2, height: 3, width: 5) == values)
+}

@@ -1,13 +1,30 @@
 import Foundation
 
+let jpegAIModelNames = ["0.002", "0.012", "0.075", "0.5"]
+
+func readJPEGAICSV(_ url: URL) throws -> [[Int64]] {
+    let text = try String(contentsOf: url, encoding: .utf8)
+    return try text.split(whereSeparator: \.isNewline).map { line in
+        try line.split(separator: ",").map {
+            guard let value = Int64($0.trimmingCharacters(in: .whitespaces)) else {
+                throw JPEGAIEntropyError.invalidTables
+            }
+            return value
+        }
+    }
+}
+
 public struct JPEGAIZTables: Sendable {
     let y: [UInt8]
     let uv: [UInt8]
 
     public init(directory: URL, model: Int) throws {
-        let names = ["0.002", "0.012", "0.075", "0.5"]
-        guard names.indices.contains(model) else { throw JPEGAIEntropyError.invalidTables }
-        let distributions = try Self.csv(directory.appendingPathComponent("unique_z_distributions.csv"))
+        guard jpegAIModelNames.indices.contains(model) else {
+            throw JPEGAIEntropyError.invalidTables
+        }
+        let distributions = try readJPEGAICSV(
+            directory.appendingPathComponent("unique_z_distributions.csv")
+        )
         guard distributions.count == 128, distributions.allSatisfy({ $0.count == 63 }) else {
             throw JPEGAIEntropyError.invalidTables
         }
@@ -20,14 +37,16 @@ public struct JPEGAIZTables: Sendable {
                 return UInt8((cumulative * 255 + total / 2) / total)
             }
         }
-        y = try Self.mapped("Y", names[model], directory, normalized)
-        uv = try Self.mapped("UV", names[model], directory, normalized)
+        y = try Self.mapped("Y", jpegAIModelNames[model], directory, normalized)
+        uv = try Self.mapped("UV", jpegAIModelNames[model], directory, normalized)
     }
 
     private static func mapped(
         _ component: String, _ model: String, _ directory: URL, _ distributions: [[UInt8]]
     ) throws -> [UInt8] {
-        let rows = try csv(directory.appendingPathComponent("\(component)_\(model).csv"))
+        let rows = try readJPEGAICSV(
+            directory.appendingPathComponent("\(component)_\(model).csv")
+        )
         return try rows.flatMap { row in
             guard row.count == 1, distributions.indices.contains(Int(row[0])) else {
                 throw JPEGAIEntropyError.invalidTables
@@ -36,17 +55,6 @@ public struct JPEGAIZTables: Sendable {
         }
     }
 
-    private static func csv(_ url: URL) throws -> [[Int64]] {
-        let text = try String(contentsOf: url, encoding: .utf8)
-        return try text.split(whereSeparator: \.isNewline).map { line in
-            try line.split(separator: ",").map {
-                guard let value = Int64($0.trimmingCharacters(in: .whitespaces)) else {
-                    throw JPEGAIEntropyError.invalidTables
-                }
-                return value
-            }
-        }
-    }
 }
 
 public struct JPEGAIHyperLatents: Sendable {
@@ -62,7 +70,7 @@ public struct JPEGAIHyperLatents: Sendable {
 public extension JPEGAIBitstream {
     func decodeHyperLatents(using tables: JPEGAIZTables) throws -> JPEGAIHyperLatents {
         let header = try pictureHeader
-        guard header.decoderProfile == 0, header.synthesisTransforms.first == 0 else {
+        guard header.decoderProfile == 0, header.synthesisTransforms == [0] else {
             throw JPEGAIBitstreamError.unsupportedFeature("non-simple decoder profile")
         }
         guard tables.y.count == header.channelsY * 63,

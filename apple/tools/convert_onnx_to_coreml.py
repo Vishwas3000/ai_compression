@@ -21,6 +21,10 @@ DTYPES = {
 }
 
 
+def _floor_div(first: torch.Tensor, second: torch.Tensor) -> torch.Tensor:
+    return torch.div(first, second, rounding_mode="floor")
+
+
 def convert_model(
     input_path: Path,
     output_path: Path,
@@ -52,6 +56,12 @@ def convert_model(
         )
 
     model = convert(graph).eval()
+    if input_path.stem == "hyper_scale_decoder":
+        divisions = [module for name, module in model.named_modules() if name.endswith("/Div")]
+        if len(divisions) != 3:
+            raise ValueError(f"expected three scale-model divisions, found {len(divisions)}")
+        for module in divisions:
+            module.math_op_function = _floor_div
     traced = torch.jit.trace(model, tuple(samples), strict=False)
     converted = ct.convert(
         traced,
