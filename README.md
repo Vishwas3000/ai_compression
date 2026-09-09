@@ -14,7 +14,9 @@ commercial deployment.
 
 - encoded size and bits per pixel (bpp)
 - RGB PSNR
-- median encode and decode wall time
+- median encode and decode time, split into total wall time, codec work,
+  model loading, and process/import/I/O overhead when the reference codec
+  reports its internal timers
 - source SHA-256 and run metadata for reproducibility
 
 Compare codecs using **PSNR versus bpp curves**, not matching numeric quality
@@ -68,6 +70,13 @@ flags and operating points to the exact JPEG AI build being studied.
 
 The CSV is written beside a `*.metadata.json` file. Encoded and decoded files
 go to `artifacts/` for inspection.
+
+`encode_total_ms` and `decode_total_ms` always preserve the measured wall
+time. For the official JPEG AI reference software, the `*_codec_ms`,
+`*_model_load_ms`, and `*_overhead_ms` columns separate its `TOTAL` and
+`Loading models` timers from Python startup, imports, CUDA initialization, and
+I/O. Those breakdown columns stay blank for external codecs that do not print
+both timers. The in-process JPEG baseline has total time equal to codec time.
 
 ## Check
 

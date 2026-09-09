@@ -26,7 +26,10 @@ class BenchmarkSmokeTest(unittest.TestCase):
 
             fake_codec = root / "fake_codec.py"
             fake_codec.write_text(
-                "import shutil, sys\nshutil.copyfile(sys.argv[1], sys.argv[2])\n",
+                "import shutil, sys\n"
+                "shutil.copyfile(sys.argv[1], sys.argv[2])\n"
+                "print('Loading models: 0.001 second')\n"
+                "print('TOTAL: 0:00:00.002')\n",
                 encoding="utf-8",
             )
             codec_command = " ".join(
@@ -69,6 +72,11 @@ class BenchmarkSmokeTest(unittest.TestCase):
             for row in rows:
                 self.assertGreater(float(row["bits_per_pixel"]), 0)
                 self.assertGreater(float(row["psnr_db"]), 0)
+            ai = next(row for row in rows if row["codec"] == "jpeg-ai")
+            self.assertEqual(float(ai["encode_codec_ms"]), 2)
+            self.assertEqual(float(ai["encode_model_load_ms"]), 1)
+            self.assertGreater(float(ai["encode_total_ms"]), 3)
+            self.assertGreaterEqual(float(ai["encode_overhead_ms"]), 0)
 
 
 if __name__ == "__main__":

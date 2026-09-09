@@ -17,7 +17,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, NamedTuple
 
 from PIL import Image, ImageChops, ImageOps, features
 
@@ -33,9 +33,22 @@ FIELDS = (
     "encoded_bytes",
     "bits_per_pixel",
     "psnr_db",
-    "encode_ms",
-    "decode_ms",
+    "encode_total_ms",
+    "encode_codec_ms",
+    "encode_model_load_ms",
+    "encode_overhead_ms",
+    "decode_total_ms",
+    "decode_codec_ms",
+    "decode_model_load_ms",
+    "decode_overhead_ms",
 )
+
+
+class Timing(NamedTuple):
+    total_ms: float
+    codec_ms: float | None
+    model_load_ms: float | None
+    overhead_ms: float | None
 
 
 def positive_int(value: str) -> int:
@@ -126,6 +139,27 @@ def median_ms(action: Callable[[], None], warmup: int, repeats: int) -> float:
     return statistics.median(samples)
 
 
+def reference_timing(output: str, total_ms: float) -> Timing:
+    total = re.search(r"TOTAL:\s*(\d+):(\d+):([\d.]+)", output)
+    loading = re.search(r"Loading models:\s*([\d.]+)\s*second", output)
+    if total is None or loading is None:
+        return Timing(total_ms, None, None, None)
+    codec_ms = (int(total[1]) * 3600 + int(total[2]) * 60 + float(total[3])) * 1000
+    load_ms = float(loading[1]) * 1000
+    return Timing(total_ms, codec_ms, load_ms, max(0.0, total_ms - codec_ms - load_ms))
+
+
+def median_command(action: Callable[[], str], warmup: int, repeats: int) -> Timing:
+    for _ in range(warmup):
+        action()
+    samples = []
+    for _ in range(repeats):
+        started = time.perf_counter()
+        output = action()
+        samples.append(reference_timing(output, (time.perf_counter() - started) * 1000))
+    return Timing(*(statistics.median(values) if None not in values else None for values in zip(*samples)))
+
+
 def load_rgb(path: Path) -> Image.Image:
     with Image.open(path) as image:
         return image.convert("RGB")
@@ -147,12 +181,13 @@ def command(template: str, **values: str) -> list[str]:
         raise ValueError(f"unknown command placeholder: {error.args[0]}") from error
 
 
-def run_command(template: str, *, cwd: Path | None = None, **values: str) -> None:
+def run_command(template: str, *, cwd: Path | None = None, **values: str) -> str:
     argv = command(template, **values)
     completed = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
     if completed.returncode:
         detail = completed.stderr.strip() or completed.stdout.strip() or "no command output"
         raise RuntimeError(f"command failed ({completed.returncode}): {shlex.join(argv)}\n{detail}")
+    return "\n".join((completed.stdout, completed.stderr))
 
 
 def extension(value: str) -> str:
@@ -171,10 +206,14 @@ def result_row(
     reference: Image.Image,
     decoded: Image.Image,
     encoded: Path,
-    encode_ms: float,
-    decode_ms: float,
+    encode: Timing,
+    decode: Timing,
 ) -> dict[str, object]:
     size = encoded.stat().st_size
+
+    def rounded(value: float | None) -> float | str:
+        return "" if value is None else round(value, 3)
+
     return {
         "source": str(source),
         "source_sha256": source_hash,
@@ -185,8 +224,14 @@ def result_row(
         "encoded_bytes": size,
         "bits_per_pixel": round(size * 8 / (reference.width * reference.height), 6),
         "psnr_db": "inf" if math.isinf(value := psnr(reference, decoded)) else round(value, 6),
-        "encode_ms": round(encode_ms, 3),
-        "decode_ms": round(decode_ms, 3),
+        "encode_total_ms": rounded(encode.total_ms),
+        "encode_codec_ms": rounded(encode.codec_ms),
+        "encode_model_load_ms": rounded(encode.model_load_ms),
+        "encode_overhead_ms": rounded(encode.overhead_ms),
+        "decode_total_ms": rounded(decode.total_ms),
+        "decode_codec_ms": rounded(decode.codec_ms),
+        "decode_model_load_ms": rounded(decode.model_load_ms),
+        "decode_overhead_ms": rounded(decode.overhead_ms),
     }
 
 
@@ -222,8 +267,8 @@ def benchmark_jpeg(
         reference,
         load_rgb(encoded),
         encoded,
-        encode_ms,
-        decode_ms,
+        Timing(encode_ms, encode_ms, 0, 0),
+        Timing(decode_ms, decode_ms, 0, 0),
     )
 
 
@@ -241,9 +286,9 @@ def benchmark_jpeg_ai(
     decoded_path = point_dir / f"{reference_path.stem}.decoded{extension(args.jpeg_ai_decoded_extension)}"
     point_dir.mkdir(parents=True, exist_ok=True)
 
-    def encode() -> None:
+    def encode() -> str:
         encoded.unlink(missing_ok=True)
-        run_command(
+        output = run_command(
             args.jpeg_ai_encoder,
             cwd=args.jpeg_ai_cwd,
             input=str(reference_path.resolve()),
@@ -253,12 +298,13 @@ def benchmark_jpeg_ai(
         )
         if not encoded.is_file():
             raise RuntimeError(f"JPEG AI encoder did not create {encoded}")
+        return output
 
-    encode_ms = median_ms(encode, args.warmup, args.repeats)
+    encode_timing = median_command(encode, args.warmup, args.repeats)
 
-    def decode() -> None:
+    def decode() -> str:
         decoded_path.unlink(missing_ok=True)
-        run_command(
+        output = run_command(
             args.jpeg_ai_decoder,
             cwd=args.jpeg_ai_cwd,
             input=str(encoded.resolve()),
@@ -268,8 +314,9 @@ def benchmark_jpeg_ai(
         )
         if not decoded_path.is_file():
             raise RuntimeError(f"JPEG AI decoder did not create {decoded_path}")
+        return output
 
-    decode_ms = median_ms(decode, args.warmup, args.repeats)
+    decode_timing = median_command(decode, args.warmup, args.repeats)
     return result_row(
         source,
         source_hash,
@@ -278,8 +325,8 @@ def benchmark_jpeg_ai(
         reference,
         load_rgb(decoded_path),
         encoded,
-        encode_ms,
-        decode_ms,
+        encode_timing,
+        decode_timing,
     )
 
 
