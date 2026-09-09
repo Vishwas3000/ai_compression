@@ -8,3 +8,4 @@ results/
 runs/
 apple/.build/
 apple/Models/
+apple/dist/

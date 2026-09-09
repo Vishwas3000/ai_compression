@@ -1,35 +1,11 @@
 import Foundation
 import CryptoKit
 import CoreML
-import CoreGraphics
-import ImageIO
 import JPEGAI
-import UniformTypeIdentifiers
 
 guard (2 ... 5).contains(CommandLine.arguments.count) else {
     FileHandle.standardError.write(Data("usage: jpegai-info INPUT.bits [TABLES_DIR [MODELS_DIR [OUTPUT.png]]]\n".utf8))
     exit(2)
-}
-
-func writePNG(_ image: JPEGAIDecodedImage, to url: URL) throws {
-    guard let provider = CGDataProvider(data: Data(image.rgb) as CFData),
-          let cgImage = CGImage(
-            width: image.width, height: image.height,
-            bitsPerComponent: 8, bitsPerPixel: 24, bytesPerRow: image.width * 3,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
-            provider: provider, decode: nil, shouldInterpolate: false,
-            intent: .defaultIntent
-          ),
-          let destination = CGImageDestinationCreateWithURL(
-            url as CFURL, UTType.png.identifier as CFString, 1, nil
-          ) else {
-        throw CocoaError(.fileWriteUnknown)
-    }
-    CGImageDestinationAddImage(destination, cgImage, nil)
-    guard CGImageDestinationFinalize(destination) else {
-        throw CocoaError(.fileWriteUnknown)
-    }
 }
 
 do {
@@ -78,7 +54,7 @@ do {
             print("Core ML synthesis -> \(image.width)x\(image.height) RGB")
             if CommandLine.arguments.count == 5 {
                 let output = URL(fileURLWithPath: CommandLine.arguments[4])
-                try writePNG(image, to: output)
+                try image.writePNG(to: output)
                 print("Wrote \(output.path)")
             }
         }

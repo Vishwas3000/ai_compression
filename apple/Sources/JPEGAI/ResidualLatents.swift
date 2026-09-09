@@ -1,6 +1,9 @@
 #if canImport(CoreML)
 import CoreML
+import CoreGraphics
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 public struct JPEGAIResidualTables: Sendable {
     let transitions: [UInt32]
@@ -74,10 +77,49 @@ public struct JPEGAIDecodedImage: Sendable {
     public let width: Int
     public let height: Int
     public let rgb: [UInt8]
+
+    public func writePNG(to url: URL) throws {
+        guard let provider = CGDataProvider(data: Data(rgb) as CFData),
+              let image = CGImage(
+                width: width, height: height,
+                bitsPerComponent: 8, bitsPerPixel: 24, bytesPerRow: width * 3,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: false,
+                intent: .defaultIntent
+              ),
+              let destination = CGImageDestinationCreateWithURL(
+                url as CFURL, UTType.png.identifier as CFString, 1, nil
+              ) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+    }
 }
 
 @available(macOS 13, iOS 16, *)
 public extension JPEGAIBitstream {
+    func decodeImage(
+        tablesDirectory: URL, models: JPEGAICoreMLModelSet
+    ) async throws -> JPEGAIDecodedImage {
+        let header = try pictureHeader
+        let hyper = try decodeHyperLatents(
+            using: JPEGAIZTables(directory: tablesDirectory, model: header.model)
+        )
+        let residualTables = try JPEGAIResidualTables(
+            directory: tablesDirectory, model: header.model
+        )
+        let residuals = try await decodeResidualLatents(
+            hyper: hyper, tables: residualTables, models: models
+        )
+        return try await reconstructImage(
+            hyper: hyper, residuals: residuals, tables: residualTables, models: models
+        )
+    }
+
     func decodeResidualLatents(
         hyper: JPEGAIHyperLatents,
         tables: JPEGAIResidualTables,

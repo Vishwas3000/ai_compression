@@ -22,7 +22,8 @@ DTYPES = {
 
 
 def _floor_div(first: torch.Tensor, second: torch.Tensor) -> torch.Tensor:
-    return torch.div(first, second, rounding_mode="floor")
+    # Core ML otherwise lowers integer floor division to truncation toward zero.
+    return torch.floor(first.float() / second.float())
 
 
 def convert_model(

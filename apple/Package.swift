@@ -8,11 +8,13 @@ let package = Package(
     products: [
         .library(name: "JPEGAI", targets: ["JPEGAI"]),
         .executable(name: "jpegai-info", targets: ["JPEGAIInfo"]),
+        .executable(name: "JPEGAIDecoder", targets: ["JPEGAIDecoder"]),
     ],
     targets: [
         .target(name: "CJPEGAIEntropy", publicHeadersPath: "include"),
         .target(name: "JPEGAI", dependencies: ["CJPEGAIEntropy"]),
         .executableTarget(name: "JPEGAIInfo", dependencies: ["JPEGAI"]),
+        .executableTarget(name: "JPEGAIDecoder", dependencies: ["JPEGAI"]),
         .testTarget(name: "JPEGAITests", dependencies: ["JPEGAI"]),
     ]
 )

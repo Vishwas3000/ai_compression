@@ -93,5 +93,5 @@ report results across multiple operating points.
 [`apple/`](apple/) contains the macOS/iOS decoder work. It now decodes an
 untiled 4:4:4 simple-profile codestream through native entropy decoding and
 Core ML reconstruction to an RGB PNG. See [`apple/README.md`](apple/README.md)
-for the command, reproducible model conversion, validation, and current profile
-limits.
+for the command-line decoder, double-clickable macOS app, reproducible model
+conversion, validation, and current profile limits.
