@@ -123,6 +123,11 @@ jpeg-ai encode input.png output.bits --preset 75
 jpeg-ai decode output.bits reconstructed.png
 ```
 
+See [`PRODUCTION_RESEARCH.md`](PRODUCTION_RESEARCH.md) for the measured
+performance interpretation, prioritized Apple-silicon production work,
+video-codec outlook, current alternatives, and the two routes for contributing
+code or standards work upstream.
+
 ## License
 
 This project is MIT licensed. The native codec also contains work derived from
