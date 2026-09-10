@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-version=${1:-0.1.0}
+version=${1:-0.1.1}
 archive="$root/dist/jpeg-ai-apple-models-$version.tar.gz"
 
 case "$version" in

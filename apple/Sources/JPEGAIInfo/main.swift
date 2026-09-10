@@ -3,7 +3,7 @@ import CryptoKit
 import CoreML
 import JPEGAI
 
-private let cliVersion = "0.1.0"
+private let cliVersion = "0.1.1"
 private let cliUsage = """
 usage: jpeg-ai encode INPUT.png OUTPUT.bits [--preset 12|25|50|75|100] [--visualizations DIR]
        jpeg-ai decode INPUT.bits OUTPUT.png
@@ -32,8 +32,8 @@ private struct CLIResources {
 
     static func locate() throws -> Self {
         let manager = FileManager.default
-        let executable = URL(fileURLWithPath: CommandLine.arguments[0])
-            .resolvingSymlinksInPath()
+        let executable = (Bundle.main.executableURL
+            ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath()
         let prefix = executable.deletingLastPathComponent().deletingLastPathComponent()
         let current = URL(fileURLWithPath: manager.currentDirectoryPath, isDirectory: true)
         var candidates = [
