@@ -11,7 +11,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         checkboxWithTitle: "Export y/z inference visualizations", target: nil, action: nil
     )
     private let revealDiagnosticsButton = NSButton(
-        title: "Reveal Visualizations", target: nil, action: nil
+        title: "View Inference Steps", target: nil, action: nil
     )
     private let imageView = NSImageView()
     private let progress = NSProgressIndicator()
@@ -21,6 +21,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private var codec: BenchmarkCodec?
     private var diagnosticsDirectory: URL?
+    private var inferenceWindow: InferenceWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let title = NSTextField(labelWithString: "JPEG AI Codec Lab")
@@ -150,7 +151,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func revealDiagnostics() {
         guard let diagnosticsDirectory else { return }
-        NSWorkspace.shared.open(diagnosticsDirectory)
+        let controller = InferenceWindowController(directory: diagnosticsDirectory)
+        inferenceWindow = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
     }
 
     private func encode(
@@ -163,7 +167,12 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let measurement = try await codec.encode(
                     input, to: output, preview: preview,
-                    diagnostics: diagnostics, preset: preset
+                    diagnostics: diagnostics, preset: preset,
+                    progress: { stage in
+                        await MainActor.run {
+                            self.status.stringValue = stage.rawValue
+                        }
+                    }
                 )
                 imageView.image = NSImage(contentsOf: preview)
                 let kind = measurement.firstRun ? "First" : "Repeat"
@@ -280,6 +289,149 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+@MainActor
+private final class InferenceWindowController: NSWindowController {
+    private struct Step {
+        let title: String
+        let filename: String
+        let explanation: String
+    }
+
+    private static let definitions = [
+        Step(
+            title: "1. Input luma", filename: "01-input-luma.png",
+            explanation: "The PNG has been converted to BT.709 YUV. This luminance plane enters the learned analysis transform."
+        ),
+        Step(
+            title: "2. Learned y channels", filename: "02-y-latent-160-channels.png",
+            explanation: "The analysis network compressed the luma plane into 160 spatial feature channels. Orange is positive and blue is negative; each tile is normalized independently."
+        ),
+        Step(
+            title: "3. y activation energy", filename: "03-y-latent-energy.png",
+            explanation: "Mean absolute activation across the 160 y channels. It shows where the primary latent spends representation capacity."
+        ),
+        Step(
+            title: "4. Quantized z channels", filename: "04-z-hyperlatent-160-channels.png",
+            explanation: "The hyper-encoder reduced y to a coarser z space and rounded it to symbols. z describes how y should be predicted and entropy-coded."
+        ),
+        Step(
+            title: "5. z activation energy", filename: "05-z-hyperlatent-energy.png",
+            explanation: "Mean absolute activation across z. Its coarse grid carries coding context, not a miniature reconstruction."
+        ),
+        Step(
+            title: "6. Entropy-mask density", filename: "06-entropy-mask-density.png",
+            explanation: "The integer hyper-scale decoder used z to choose probability distributions and decide which y values are coded. Brighter areas code a larger fraction of channels."
+        ),
+        Step(
+            title: "7. Quantized y residual", filename: "07-y-quantized-residual-energy.png",
+            explanation: "After four-stage context prediction, only the quantized prediction residual is sent to me-tANS. Bright regions needed larger corrections."
+        ),
+    ]
+
+    private let directory: URL
+    private let steps: [Step]
+    private let picker = NSPopUpButton()
+    private let imageView = NSImageView()
+    private let explanation = NSTextField(wrappingLabelWithString: "")
+    private let previousButton = NSButton(title: "Previous", target: nil, action: nil)
+    private let nextButton = NSButton(title: "Next", target: nil, action: nil)
+
+    init(directory: URL) {
+        self.directory = directory
+        steps = Self.definitions.filter {
+            FileManager.default.fileExists(atPath: directory.appendingPathComponent($0.filename).path)
+        }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 920, height: 760),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered, defer: false
+        )
+        super.init(window: window)
+        window.title = "JPEG AI Inference Steps"
+
+        let title = NSTextField(labelWithString: "Runtime inference explorer")
+        title.font = .systemFont(ofSize: 24, weight: .semibold)
+        let flow = NSTextField(
+            labelWithString: "Pixels → y → z → probability model → y residual → me-tANS → bitstream"
+        )
+        flow.textColor = .secondaryLabelColor
+
+        picker.addItems(withTitles: steps.map(\.title))
+        picker.target = self
+        picker.action = #selector(selectStep)
+        picker.setAccessibilityLabel("Inference visualization step")
+
+        previousButton.target = self
+        previousButton.action = #selector(previousStep)
+        nextButton.target = self
+        nextButton.action = #selector(nextStep)
+        let reveal = NSButton(title: "Reveal Files in Finder", target: self, action: #selector(revealFiles))
+        let navigation = NSStackView(views: [previousButton, picker, nextButton, reveal])
+        navigation.orientation = .horizontal
+        navigation.alignment = .centerY
+        navigation.spacing = 10
+
+        explanation.alignment = .center
+        explanation.textColor = .secondaryLabelColor
+        explanation.maximumNumberOfLines = 4
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageFrameStyle = .photo
+
+        let stack = NSStackView(views: [title, flow, navigation, explanation, imageView])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 12
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let content = NSView()
+        content.addSubview(stack)
+        window.contentView = content
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -24),
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 30),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -30),
+            explanation.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            imageView.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            imageView.heightAnchor.constraint(greaterThanOrEqualToConstant: 500),
+        ])
+        renderStep()
+        window.center()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+    @objc private func selectStep() { renderStep() }
+
+    @objc private func previousStep() {
+        picker.selectItem(at: max(0, picker.indexOfSelectedItem - 1))
+        renderStep()
+    }
+
+    @objc private func nextStep() {
+        picker.selectItem(at: min(steps.count - 1, picker.indexOfSelectedItem + 1))
+        renderStep()
+    }
+
+    @objc private func revealFiles() { NSWorkspace.shared.open(directory) }
+
+    private func renderStep() {
+        guard !steps.isEmpty else {
+            explanation.stringValue = "No inference images were found. Encode with visualization export enabled."
+            previousButton.isEnabled = false
+            nextButton.isEnabled = false
+            return
+        }
+        let index = max(0, picker.indexOfSelectedItem)
+        let step = steps[index]
+        imageView.image = NSImage(contentsOf: directory.appendingPathComponent(step.filename))
+        imageView.setAccessibilityLabel(step.title)
+        explanation.stringValue = step.explanation
+        previousButton.isEnabled = index > 0
+        nextButton.isEnabled = index + 1 < steps.count
+    }
+}
+
 let application = NSApplication.shared
 private let applicationDelegate = AppDelegate()
 application.setActivationPolicy(.regular)
@@ -341,19 +493,25 @@ private actor BenchmarkCodec {
 
     func encode(
         _ input: URL, to output: URL, preview: URL,
-        diagnostics: URL?, preset: RatePreset
+        diagnostics: URL?, preset: RatePreset,
+        progress: @escaping @Sendable (JPEGAIEncodingStage) async -> Void
     ) async throws -> EncodeMeasurement {
         let image = try JPEGAIDecodedImage.readPNG(from: input)
         let started = ContinuousClock.now
         let encoded = try await image.encodeJPEGAI(
             tablesDirectory: tables, models: models,
             model: preset.model, beta: preset.beta,
-            includeDiagnostics: diagnostics != nil
+            includeDiagnostics: diagnostics != nil,
+            progress: progress
         )
         let encodeSeconds = Self.seconds(started.duration(to: .now))
         try encoded.write(to: output)
-        if let diagnostics { try encoded.diagnostics?.write(to: diagnostics) }
+        if let diagnostics {
+            await progress(.diagnostics)
+            try encoded.diagnostics?.write(to: diagnostics)
+        }
 
+        await progress(.verificationDecode)
         let stream = try JPEGAIBitstream(data: encoded.data)
         let decodeStarted = ContinuousClock.now
         let reconstructed = try await stream.decodeImage(tablesDirectory: tables, models: models)

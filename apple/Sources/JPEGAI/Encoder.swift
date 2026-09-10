@@ -35,6 +35,19 @@ public enum JPEGAIEncodeError: LocalizedError {
     }
 }
 
+public enum JPEGAIEncodingStage: String, Sendable {
+    case preparingInput = "1/10  Preparing RGB and BT.709 YUV planes"
+    case lumaAnalysis = "2/10  Analysis transform: luma pixels → y"
+    case lumaHyperEncoder = "3/10  Hyper-encoder: y → z"
+    case lumaEntropyModel = "4/10  Hyper-decoders: z → scale, mask, and context"
+    case lumaContextModel = "5/10  Four-stage context model: predicting y residuals"
+    case chroma = "6/10  Encoding chroma latents"
+    case entropyCoding = "7/10  me-tANS entropy coding"
+    case bitstream = "8/10  Assembling the JPEG AI bitstream"
+    case diagnostics = "9/10  Rendering captured inference tensors"
+    case verificationDecode = "10/10  Verification decode and reconstruction"
+}
+
 public extension JPEGAIDecodedImage {
     static func readPNG(from url: URL) throws -> Self {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -71,7 +84,8 @@ public extension JPEGAIDecodedImage {
         models: isolated JPEGAICoreMLModelSet,
         model: Int,
         beta: Int,
-        includeDiagnostics: Bool = false
+        includeDiagnostics: Bool = false,
+        progress: (@Sendable (JPEGAIEncodingStage) async -> Void)? = nil
     ) async throws -> JPEGAIEncodedImage {
         guard (0 ..< 4).contains(model) else { throw JPEGAIEncodeError.invalidModel }
         guard (-2048 ... 2047).contains(beta) else { throw JPEGAIEncodeError.invalidBeta }
@@ -82,6 +96,7 @@ public extension JPEGAIDecodedImage {
             throw JPEGAIEncodeError.unsupportedDimensions(width: width, height: height)
         }
 
+        await progress?(.preparingInput)
         let tables = try EncoderTables(directory: tablesDirectory, model: model)
         let planes = Self.yuvPlanes(
             rgb: rgb, width: width, height: height,
@@ -102,6 +117,7 @@ public extension JPEGAIDecodedImage {
             inputHeight: Int, inputWidth: Int, channels: Int, gain: [Int32],
             contextual: Bool
         ) async throws -> EncodedComponent {
+            if contextual { await progress?(.lumaAnalysis) }
             let analysis = try await models.predict(
                 tool: model, component: component, path: "analysis",
                 inputs: [try JPEGAICoreMLModelSet.floatArray(
@@ -111,6 +127,7 @@ public extension JPEGAIDecodedImage {
             let y = try JPEGAICoreMLModelSet.float32Values(
                 analysis, channels: channels, height: latentHeight, width: latentWidth
             )
+            if contextual { await progress?(.lumaHyperEncoder) }
             let hyper = try await models.predict(
                 tool: model, component: component, path: "common_modules/hyper_encoder",
                 inputs: [try JPEGAICoreMLModelSet.floatArray(
@@ -125,6 +142,7 @@ public extension JPEGAIDecodedImage {
             let zInput = try JPEGAICoreMLModelSet.int32Array(
                 z, channels: channels, height: hyperHeight, width: hyperWidth
             )
+            if contextual { await progress?(.lumaEntropyModel) }
             let scaleOutput = try await models.predict(
                 tool: model, component: component,
                 path: "common_modules/hyper_scale_decoder", inputs: [zInput]
@@ -158,6 +176,7 @@ public extension JPEGAIDecodedImage {
             let scalers = Self.scalers(gain: gain, beta: beta)
             let quantized: [Int16]
             if contextual {
+                await progress?(.lumaContextModel)
                 let yParts = JPEGAIBitstream.downShuffle(
                     y, channels: channels, height: latentHeight, width: latentWidth
                 )
@@ -226,12 +245,14 @@ public extension JPEGAIDecodedImage {
             inputHeight: codedHeight, inputWidth: codedWidth,
             channels: 160, gain: tables.residual.gainY, contextual: true
         )
+        await progress?(.chroma)
         let uv = try await transform(
             component: "model_uv", input: uvInput, inputChannels: 12,
             inputHeight: codedHeight / 2, inputWidth: codedWidth / 2,
             channels: 96, gain: tables.residual.gainUV, contextual: false
         )
 
+        await progress?(.entropyCoding)
         let hyperEncoder = try JPEGAIEntropyEncoder(
             capacity: (y.zSymbols.count + uv.zSymbols.count) * 4 + 64
         )
@@ -260,6 +281,7 @@ public extension JPEGAIDecodedImage {
             return try encoder.finish()
         }
 
+        await progress?(.bitstream)
         let data = try JPEGAIBitstream.simpleProfileData(
             codedWidth: codedWidth, codedHeight: codedHeight,
             displayWidth: width, displayHeight: height,
@@ -276,7 +298,7 @@ public extension JPEGAIDecodedImage {
                 z: y.z.map(Float32.init), zChannels: 160,
                 latentWidth: latentWidth, latentHeight: latentHeight,
                 hyperWidth: hyperWidth, hyperHeight: hyperHeight,
-                mask: y.masks
+                mask: y.masks, residual: y.quantized.map(Float32.init)
             ) : nil
         )
     }
@@ -401,6 +423,7 @@ public struct JPEGAIEncodingDiagnostics: Sendable {
     fileprivate let hyperWidth: Int
     fileprivate let hyperHeight: Int
     fileprivate let mask: [UInt8]
+    fileprivate let residual: [Float32]
 
     public func write(to directory: URL) throws {
         try FileManager.default.createDirectory(
@@ -451,6 +474,14 @@ public struct JPEGAIEncodingDiagnostics: Sendable {
             width: latentWidth * 10, height: latentHeight * 10,
             to: directory.appendingPathComponent("06-entropy-mask-density.png")
         )
+        try Self.writePNG(
+            rgb: Self.energyMap(
+                residual, channels: yChannels,
+                height: latentHeight, width: latentWidth, scale: 10
+            ),
+            width: latentWidth * 10, height: latentHeight * 10,
+            to: directory.appendingPathComponent("07-y-quantized-residual-energy.png")
+        )
         let note = """
         # JPEG AI inference tensors
 
@@ -462,6 +493,7 @@ public struct JPEGAIEncodingDiagnostics: Sendable {
         4. `04-z-hyperlatent-160-channels.png`: all 160 rounded hyper-latent `z` channels.
         5. `05-z-hyperlatent-energy.png`: mean absolute `z` activation.
         6. `06-entropy-mask-density.png`: fraction of `y` channels entropy-coded at each position.
+        7. `07-y-quantized-residual-energy.png`: mean absolute residual after context prediction and quantization.
 
         `y` shape: [1, \(yChannels), \(latentHeight), \(latentWidth)]
         `z` shape: [1, \(zChannels), \(hyperHeight), \(hyperWidth)]

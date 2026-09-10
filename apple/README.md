@@ -52,12 +52,14 @@ open dist/JPEGAIDecoder.app
 ```
 
 The app can encode a PNG or decode a `.bits` file and displays the reconstructed
-image and first/repeat timing. Leave **Export y/z inference visualizations**
-selected while encoding, then choose **Reveal Visualizations**. The exported
-folder contains the input luma, every learned `y` and rounded `z` channel,
-energy maps, and entropy-mask density. These are real per-image tensors, not a
-conceptual illustration. Netron can separately open an ONNX model such as
-`Models/onnx/tools_2/model_y/analysis.onnx` to inspect the fixed layer graph.
+image and first/repeat timing. During encoding it reports the active model or
+codec stage. Leave **Export y/z inference visualizations** selected, then choose
+**View Inference Steps** to browse the input luma, every learned `y` and rounded
+`z` channel, energy maps, entropy-mask density, and quantized context residual
+inside the app. These are real per-image tensors, not a conceptual illustration.
+The explorer can also reveal the generated PNGs in Finder. Netron can separately
+open an ONNX model such as `Models/onnx/tools_2/model_y/analysis.onnx` to inspect
+the fixed layer graph.
 
 The generated app stays under ignored `dist/`; the local build includes tables
 and converted models for all four simple-profile models. Distribution to other
