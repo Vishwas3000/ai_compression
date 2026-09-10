@@ -197,6 +197,37 @@ latents for segmentation with nearly ten times fewer model parameters. That
 compressed-domain path—not only smaller pictures—may become its most distinct
 production advantage.
 
+## Recent learned-compression directions (2024–2026)
+
+The research frontier is not one race with one winner. Each branch optimizes a
+different combination of fidelity, perceived quality, latency, model size,
+adaptability, and interoperability. Results below are reported by the paper
+authors on their own datasets and hardware; they are not directly comparable to
+one another or to this repository's one-image smoke test.
+
+| Direction | Representative work | What changed | Production trade-off |
+| --- | --- | --- | --- |
+| Hardware-aware perceptual coding | Apple's PICO (CVPR 2026) | Searches millions of network configurations while optimizing both perceived quality and on-device runtime. The authors report 2.3–3x bitrate savings in subjective tests against AV1, AV2, VVC, ECM, and JPEG AI, plus 230 ms encode and 150 ms decode for a 12 MP image on an iPhone 17 Pro Max. | The numbers are especially relevant to this Apple port, but they measure a particular perceptual target, device, and compiler setup. They do not establish equal-PSNR superiority or standards-level interoperability. |
+| Faster learned transforms and probability models | LALIC and dictionary-based entropy coding (CVPR 2025), Cassic (ICCV 2025), and sparse-attention/adaptive-frequency coding (CVPR 2026) | Uses linear attention, learned dictionaries of common structures, content-dependent scan orders, and adaptive spatial/frequency paths to predict latents with less serial or redundant work. | These are promising research codecs, but latency claims must be repeated using the same resolution, device, software stack, and complete entropy-coding path. |
+| Per-image or per-video fitting | C3 (CVPR 2024), Wasserstein-C3 (CVPR 2025), and FNLIC (CVPR 2025) | Optimizes a small representation or model for each asset rather than relying only on one large general decoder. C3 reports VTM-like image rate-distortion with under 3,000 decode MACs per pixel; FNLIC applies the idea to lossless coding. | Encoding can require substantial optimization. This asymmetry is attractive for archives and repeatedly served media, but less suitable for instant camera capture. Model/parameter bits must be counted in the payload. |
+| Generative and diffusion decoding | MRIDC (CVPR 2025) and DiT-IC (CVPR 2026) | Reconstructs visually plausible detail at extremely low rates; DiT-IC reduces a multi-step diffusion decoder to a latent, single-step design and reports up to 30x faster decoding than earlier diffusion codecs. | Plausible detail is not necessarily the original detail. These codecs need explicit hallucination and task-safety evaluation and are a poor default for medical, scientific, legal, or evidentiary images. |
+| Progressive learned coding | Variance-aware masking (WACV 2025) | Sends a base latent first, then importance-ranked residual elements so the reconstruction improves as more bytes arrive. | Useful for previews and variable networks, but it needs a stable scalable bitstream and careful intermediate-quality testing. |
+| Compression for machines | JPEG AI compressed-domain inference and the Visual Token Codec preprint (August 2026) | Compresses latents or vision-transformer tokens for downstream segmentation, detection, or distributed inference instead of always reconstructing RGB pixels. | Rate must be evaluated against task accuracy, not only PSNR. The Visual Token Codec is a new preprint, and model/feature compatibility remains an open deployment constraint. |
+| Learned temporal coding | MobileNVC (WACV 2024) and DCVC-RT (CVPR 2025) | Exploits motion and temporal context and maps work onto practical hardware. DCVC-RT reports 125.2/112.8 fps encode/decode for 1080p on an A100 and 21% average bitrate savings against H.266/VTM. | These are hardware-specific research results. Random access, rate control, error recovery, power, and interoperable decoders remain decisive for production video. |
+
+The strongest near-term lesson for this project is not to copy every new model.
+It is to make the benchmark multidimensional. PICO belongs in the Apple-device
+comparison if runnable codec artifacts become available. C3 is a useful test of
+slow-encode/cheap-decode asymmetry. A generative codec belongs in a separate
+perceptual experiment with hallucination checks, not on the same chart as a
+fidelity codec without an explicit warning. Machine-facing approaches need task
+accuracy and transmitted-feature size alongside image metrics.
+
+The practical scorecard is therefore: payload bits, fidelity, human preference,
+task accuracy, warm and cold latency, energy, memory, model/package size,
+determinism, and bitstream interoperability. A method is "superior" only after
+the intended product assigns weights to those dimensions.
+
 ## How to contribute upstream
 
 There are two different contribution paths.
@@ -256,6 +287,20 @@ the committee's current mobile, energy, and bit-exact core experiments.
 - [Core ML flexible-shape guidance](https://apple.github.io/coremltools/docs-guides/source/flexible-inputs.html)
 - [Core ML model-compression guidance](https://apple.github.io/coremltools/docs-guides/source/opt-overview.html)
 - [Apple Core AI specialization and caching](https://developer.apple.com/documentation/coreai/managing-model-specialization-and-caching)
+- [Apple PICO: practical learned image compression (CVPR 2026)](https://machinelearning.apple.com/research/compression)
+- [C3: per-image and per-video neural compression (CVPR 2024)](https://openaccess.thecvf.com/content/CVPR2024/html/Kim_C3_High-Performance_and_Low-Complexity_Neural_Compression_from_a_Single_Image_CVPR_2024_paper.html)
+- [Good, Cheap, and Fast: Wasserstein-C3 (CVPR 2025)](https://openaccess.thecvf.com/content/CVPR2025/html/Balle_Good_Cheap_and_Fast_Overfitted_Image_Compression_with_Wasserstein_Distortion_CVPR_2025_paper.html)
+- [Fitted Neural Lossless Image Compression (CVPR 2025)](https://openaccess.thecvf.com/content/CVPR2025/html/Zhang_Fitted_Neural_Lossless_Image_Compression_CVPR_2025_paper.html)
+- [Dictionary-based learned entropy model (CVPR 2025)](https://openaccess.thecvf.com/content/CVPR2025/html/Lu_Learned_Image_Compression_with_Dictionary-based_Entropy_Model_CVPR_2025_paper.html)
+- [LALIC linear-attention compression (CVPR 2025)](https://openaccess.thecvf.com/content/CVPR2025/html/Feng_Linear_Attention_Modeling_for_Learned_Image_Compression_CVPR_2025_paper.html)
+- [Cassic content-adaptive state-space compression (ICCV 2025)](https://openaccess.thecvf.com/content/ICCV2025/html/Qin_Cassic_Towards_Content-Adaptive_State-Space_Models_for_Learned_Image_Compression_ICCV_2025_paper.html)
+- [Sparse-attention and adaptive-frequency compression (CVPR 2026)](https://openaccess.thecvf.com/content/CVPR2026/html/Ma_Learned_Image_Compression_via_Sparse_Attention_and_Adaptive_Frequency_CVPR_2026_paper.html)
+- [MRIDC region-adaptive diffusion compression (CVPR 2025)](https://openaccess.thecvf.com/content/CVPR2025/html/Xu_Decouple_Distortion_from_Perception_Region_Adaptive_Diffusion_for_Extreme-low_Bitrate_CVPR_2025_paper.html)
+- [DiT-IC single-step diffusion compression (CVPR 2026)](https://openaccess.thecvf.com/content/CVPR2026/html/Shi_DiT-IC_Aligned_Diffusion_Transformer_for_Efficient_Image_Compression_CVPR_2026_paper.html)
+- [Variance-aware progressive learned compression (WACV 2025)](https://openaccess.thecvf.com/content/WACV2025/html/Presta_Efficient_Progressive_Image_Compression_with_Variance-Aware_Masking_WACV_2025_paper.html)
+- [Visual Token Codec preprint (August 2026)](https://arxiv.org/abs/2608.08832)
+- [MobileNVC mobile neural video compression (WACV 2024)](https://openaccess.thecvf.com/content/WACV2024/html/van_Rozendaal_MobileNVC_Real-Time_1080p_Neural_Video_Compression_on_a_Mobile_Device_WACV_2024_paper.html)
+- [DCVC-RT real-time neural video compression (CVPR 2025)](https://openaccess.thecvf.com/content/CVPR2025/html/Jia_Towards_Practical_Real-Time_Neural_Video_Compression_CVPR_2025_paper.html)
 - [JPEG XL overview](https://jpeg.org/jpegxl/)
 - [Jpegli source and design summary](https://github.com/google/jpegli)
 - [AOMedia AVIF overview and specification](https://aomedia.org/specifications/avif/)
