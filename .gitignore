@@ -10,4 +10,4 @@ apple/.build/
 apple/.swiftpm/
 apple/Models/
 apple/dist/
-blog/.env
+blog/
