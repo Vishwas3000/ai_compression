@@ -13,7 +13,8 @@ commercial deployment.
 ## What it measures
 
 - encoded size and bits per pixel (bpp)
-- RGB PSNR
+- RGB and BT.709 Y/U/V PSNR
+- optional SSIM-Y, MS-SSIM-Y, and LPIPS-Alex perceptual quality
 - median encode and decode time, split into total wall time, codec work,
   model loading, and process/import/I/O overhead when the reference codec
   reports its internal timers
@@ -21,6 +22,11 @@ commercial deployment.
 
 Compare codecs using **PSNR versus bpp curves**, not matching numeric quality
 settings: each codec's setting has different semantics.
+
+PSNR reports pixel fidelity. SSIM and MS-SSIM emphasize structural similarity
+(higher is better), while LPIPS compares deep visual features (lower is
+better). Report several metrics: no single score captures every compression
+artifact.
 
 ## Setup
 
@@ -64,6 +70,19 @@ uv run python benchmark.py data/originals \
   --jpeg-ai-decoded-extension .png \
   --output results/comparison.csv
 ```
+
+The PSNR columns require only Pillow and are always populated. To add the
+perceptual metrics, use a Python environment that already contains PyTorch and
+torchvision, then install the two small metric packages and add the flag:
+
+```bash
+python -m pip install -r requirements-metrics.txt
+python benchmark.py data/originals --perceptual-metrics --metrics-device auto
+```
+
+`ssim_y`, `ms_ssim_y`, and `lpips_alex` remain blank when the optional flag is
+not used. The metadata JSON records whether they were enabled, the selected
+device, and exact metric-library versions.
 
 Command templates are parsed as arguments and run without a shell. Adjust the
 flags and operating points to the exact JPEG AI build being studied.

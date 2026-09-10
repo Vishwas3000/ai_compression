@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import importlib.metadata
 import json
 import math
 import platform
@@ -33,6 +34,12 @@ FIELDS = (
     "encoded_bytes",
     "bits_per_pixel",
     "psnr_db",
+    "psnr_y_db",
+    "psnr_u_db",
+    "psnr_v_db",
+    "ssim_y",
+    "ms_ssim_y",
+    "lpips_alex",
     "encode_total_ms",
     "encode_codec_ms",
     "encode_model_load_ms",
@@ -67,7 +74,7 @@ def nonnegative_int(value: str) -> int:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Measure rate, RGB PSNR, and wall-clock latency for JPEG and JPEG AI."
+        description="Measure rate, image quality, and wall-clock latency for JPEG and JPEG AI."
     )
     parser.add_argument("input", type=Path, help="Image file or directory of source images")
     parser.add_argument(
@@ -95,6 +102,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--jpeg-ai-decoded-extension", default=".png")
     parser.add_argument("--warmup", type=nonnegative_int, default=1)
     parser.add_argument("--repeats", type=positive_int, default=3)
+    parser.add_argument(
+        "--perceptual-metrics", action="store_true",
+        help="also calculate SSIM-Y, MS-SSIM-Y, and LPIPS-Alex (optional PyTorch dependencies)",
+    )
+    parser.add_argument(
+        "--metrics-device", choices=("auto", "cpu", "cuda", "mps"), default="auto",
+        help="device for optional perceptual metrics (default: auto)",
+    )
     return parser.parse_args(argv)
 
 
@@ -174,6 +189,99 @@ def psnr(reference: Image.Image, decoded: Image.Image) -> float:
     return math.inf if mse == 0 else 10 * math.log10(255**2 / mse)
 
 
+def yuv_psnr(reference: Image.Image, decoded: Image.Image) -> tuple[float, float, float]:
+    if reference.size != decoded.size:
+        raise ValueError(f"decoded size {decoded.size} does not match source size {reference.size}")
+    squared = [0.0, 0.0, 0.0]
+    original = reference.tobytes()
+    reconstructed = decoded.tobytes()
+    for offset in range(0, len(original), 3):
+        red = original[offset] - reconstructed[offset]
+        green = original[offset + 1] - reconstructed[offset + 1]
+        blue = original[offset + 2] - reconstructed[offset + 2]
+        y = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        u = (blue - y) / 1.8556
+        v = (red - y) / 1.5748
+        for index, error in enumerate((y, u, v)):
+            squared[index] += error * error
+    pixels = reference.width * reference.height
+    return tuple(
+        math.inf if total == 0 else 10 * math.log10(255**2 / (total / pixels))
+        for total in squared
+    )
+
+
+class PerceptualMetrics:
+    def __init__(self, enabled: bool, requested_device: str) -> None:
+        self.enabled = enabled
+        self.device_name: str | None = None
+        self.versions: dict[str, str] = {}
+        if not enabled:
+            return
+        try:
+            import lpips
+            import numpy
+            import torch
+            from pytorch_msssim import ms_ssim, ssim
+        except ImportError as error:
+            raise ValueError(
+                "--perceptual-metrics requires torch, torchvision, numpy, lpips, and "
+                "pytorch-msssim; install requirements-metrics.txt into this Python environment"
+            ) from error
+        if requested_device == "auto":
+            requested_device = (
+                "cuda" if torch.cuda.is_available()
+                else "mps" if torch.backends.mps.is_available()
+                else "cpu"
+            )
+        if requested_device == "cuda" and not torch.cuda.is_available():
+            raise ValueError("--metrics-device cuda requested, but CUDA is unavailable")
+        if requested_device == "mps" and not torch.backends.mps.is_available():
+            raise ValueError(
+                "--metrics-device mps requested, but Metal Performance Shaders is unavailable"
+            )
+        self.device_name = requested_device
+        self.device = torch.device(requested_device)
+        self.numpy = numpy
+        self.torch = torch
+        self.ssim = ssim
+        self.ms_ssim = ms_ssim
+        self.lpips = lpips.LPIPS(net="alex", verbose=False).to(self.device).eval()
+        for package in ("lpips", "numpy", "pytorch-msssim", "torch", "torchvision"):
+            self.versions[package] = importlib.metadata.version(package)
+
+    def measure(self, reference: Image.Image, decoded: Image.Image) -> dict[str, float | None]:
+        if not self.enabled:
+            return {"ssim_y": None, "ms_ssim_y": None, "lpips_alex": None}
+        torch = self.torch
+
+        def tensor(image: Image.Image):
+            array = self.numpy.asarray(image, dtype=self.numpy.float32).copy()
+            return torch.from_numpy(array).permute(2, 0, 1).unsqueeze(0).to(self.device) / 255
+
+        original = tensor(reference)
+        reconstructed = tensor(decoded)
+        original_y = (
+            0.2126 * original[:, 0:1] + 0.7152 * original[:, 1:2]
+            + 0.0722 * original[:, 2:3]
+        )
+        reconstructed_y = (
+            0.2126 * reconstructed[:, 0:1] + 0.7152 * reconstructed[:, 1:2]
+            + 0.0722 * reconstructed[:, 2:3]
+        )
+        height, width = original_y.shape[-2:]
+        padding = (0, max(0, 164 - width), 0, max(0, 164 - height))
+        with torch.inference_mode():
+            ssim_y = self.ssim(original_y, reconstructed_y, data_range=1).item()
+            ms_ssim_y = self.ms_ssim(
+                torch.nn.functional.pad(original_y, padding),
+                torch.nn.functional.pad(reconstructed_y, padding),
+                data_range=1,
+            ).item()
+            lpips_alex = self.lpips(original * 2 - 1, reconstructed * 2 - 1).item()
+        return {"ssim_y": ssim_y, "ms_ssim_y": ms_ssim_y, "lpips_alex": lpips_alex}
+
+
 def command(template: str, **values: str) -> list[str]:
     try:
         return [part.format_map(values) for part in shlex.split(template)]
@@ -208,11 +316,21 @@ def result_row(
     encoded: Path,
     encode: Timing,
     decode: Timing,
+    perceptual: PerceptualMetrics,
 ) -> dict[str, object]:
     size = encoded.stat().st_size
 
     def rounded(value: float | None) -> float | str:
         return "" if value is None else round(value, 3)
+
+    rgb_psnr = psnr(reference, decoded)
+    psnr_y, psnr_u, psnr_v = yuv_psnr(reference, decoded)
+    quality = perceptual.measure(reference, decoded)
+
+    def quality_value(value: float | None) -> float | str:
+        if value is None:
+            return ""
+        return "inf" if math.isinf(value) else round(value, 6)
 
     return {
         "source": str(source),
@@ -223,7 +341,13 @@ def result_row(
         "height": reference.height,
         "encoded_bytes": size,
         "bits_per_pixel": round(size * 8 / (reference.width * reference.height), 6),
-        "psnr_db": "inf" if math.isinf(value := psnr(reference, decoded)) else round(value, 6),
+        "psnr_db": quality_value(rgb_psnr),
+        "psnr_y_db": quality_value(psnr_y),
+        "psnr_u_db": quality_value(psnr_u),
+        "psnr_v_db": quality_value(psnr_v),
+        "ssim_y": quality_value(quality["ssim_y"]),
+        "ms_ssim_y": quality_value(quality["ms_ssim_y"]),
+        "lpips_alex": quality_value(quality["lpips_alex"]),
         "encode_total_ms": rounded(encode.total_ms),
         "encode_codec_ms": rounded(encode.codec_ms),
         "encode_model_load_ms": rounded(encode.model_load_ms),
@@ -244,6 +368,7 @@ def benchmark_jpeg(
     work_dir: Path,
     warmup: int,
     repeats: int,
+    perceptual: PerceptualMetrics,
 ) -> dict[str, object]:
     encoded = work_dir / "jpeg" / f"q{quality}" / f"{reference_path.stem}.jpg"
     encoded.parent.mkdir(parents=True, exist_ok=True)
@@ -269,6 +394,7 @@ def benchmark_jpeg(
         encoded,
         Timing(encode_ms, encode_ms, 0, 0),
         Timing(decode_ms, decode_ms, 0, 0),
+        perceptual,
     )
 
 
@@ -280,6 +406,7 @@ def benchmark_jpeg_ai(
     point: str,
     point_index: int,
     args: argparse.Namespace,
+    perceptual: PerceptualMetrics,
 ) -> dict[str, object]:
     point_dir = args.work_dir / "jpeg-ai" / slug(point)
     encoded = point_dir / f"{reference_path.stem}{extension(args.jpeg_ai_extension)}"
@@ -327,10 +454,13 @@ def benchmark_jpeg_ai(
         encoded,
         encode_timing,
         decode_timing,
+        perceptual,
     )
 
 
-def write_results(rows: list[dict[str, object]], args: argparse.Namespace) -> Path:
+def write_results(
+    rows: list[dict[str, object]], args: argparse.Namespace, perceptual: PerceptualMetrics
+) -> Path:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=FIELDS)
@@ -348,6 +478,10 @@ def write_results(rows: list[dict[str, object]], args: argparse.Namespace) -> Pa
         "jpeg_chroma_subsampling": "4:2:0",
         "warmup": args.warmup,
         "repeats": args.repeats,
+        "perceptual_metrics": args.perceptual_metrics,
+        "metrics_device_requested": args.metrics_device,
+        "metrics_device": perceptual.device_name,
+        "metric_versions": perceptual.versions,
         "jpeg_ai_encoder": args.jpeg_ai_encoder,
         "jpeg_ai_decoder": args.jpeg_ai_decoder,
         "jpeg_ai_cwd": str(args.jpeg_ai_cwd) if args.jpeg_ai_cwd else None,
@@ -364,6 +498,7 @@ def main(argv: list[str] | None = None) -> int:
         if not sources:
             raise ValueError(f"no supported images found in {args.input}")
 
+        perceptual = PerceptualMetrics(args.perceptual_metrics, args.metrics_device)
         rows: list[dict[str, object]] = []
         source_dir = args.work_dir / "sources"
         source_dir.mkdir(parents=True, exist_ok=True)
@@ -389,6 +524,7 @@ def main(argv: list[str] | None = None) -> int:
                         args.work_dir,
                         args.warmup,
                         args.repeats,
+                        perceptual,
                     )
                 )
             for point_index, point in enumerate(args.jpeg_ai_points):
@@ -401,10 +537,11 @@ def main(argv: list[str] | None = None) -> int:
                         point,
                         point_index,
                         args,
+                        perceptual,
                     )
                 )
 
-        metadata_path = write_results(rows, args)
+        metadata_path = write_results(rows, args, perceptual)
         print(f"Wrote {len(rows)} measurements to {args.output}")
         print(f"Wrote run metadata to {metadata_path}")
         return 0

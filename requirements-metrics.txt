@@ -1,0 +1,3 @@
+# Install into an environment that already contains compatible PyTorch and torchvision.
+lpips==0.1.4
+pytorch-msssim==1.0.0

@@ -72,11 +72,21 @@ class BenchmarkSmokeTest(unittest.TestCase):
             for row in rows:
                 self.assertGreater(float(row["bits_per_pixel"]), 0)
                 self.assertGreater(float(row["psnr_db"]), 0)
+                self.assertGreater(float(row["psnr_y_db"]), 0)
+                self.assertGreater(float(row["psnr_u_db"]), 0)
+                self.assertGreater(float(row["psnr_v_db"]), 0)
+                self.assertEqual(row["ssim_y"], "")
+                self.assertEqual(row["ms_ssim_y"], "")
+                self.assertEqual(row["lpips_alex"], "")
             ai = next(row for row in rows if row["codec"] == "jpeg-ai")
             self.assertEqual(float(ai["encode_codec_ms"]), 2)
             self.assertEqual(float(ai["encode_model_load_ms"]), 1)
             self.assertGreater(float(ai["encode_total_ms"]), 3)
             self.assertGreaterEqual(float(ai["encode_overhead_ms"]), 0)
+
+    def test_yuv_psnr_is_infinite_for_identical_images(self) -> None:
+        image = Image.new("RGB", (2, 2), (20, 40, 80))
+        self.assertTrue(all(value == float("inf") for value in benchmark.yuv_psnr(image, image)))
 
 
 if __name__ == "__main__":
