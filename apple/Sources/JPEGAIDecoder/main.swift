@@ -13,6 +13,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private let revealDiagnosticsButton = NSButton(
         title: "View Inference Steps", target: nil, action: nil
     )
+    private let revealOutputButton = NSButton(title: "Reveal Saved File", target: nil, action: nil)
     private let imageView = NSImageView()
     private let progress = NSProgressIndicator()
     private let status = NSTextField(
@@ -22,6 +23,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var codec: BenchmarkCodec?
     private var diagnosticsDirectory: URL?
     private var inferenceWindow: InferenceWindowController?
+    private var lastOutput: URL?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let title = NSTextField(labelWithString: "JPEG AI Codec Lab")
@@ -53,6 +55,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         revealDiagnosticsButton.target = self
         revealDiagnosticsButton.action = #selector(revealDiagnostics)
         revealDiagnosticsButton.isEnabled = false
+        revealOutputButton.target = self
+        revealOutputButton.action = #selector(revealOutput)
+        revealOutputButton.isEnabled = false
 
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.imageFrameStyle = .photo
@@ -68,10 +73,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         encodeRow.orientation = .horizontal
         encodeRow.alignment = .centerY
         encodeRow.spacing = 10
+        let decodeRow = NSStackView(views: [decodeButton, revealOutputButton])
+        decodeRow.orientation = .horizontal
+        decodeRow.alignment = .centerY
+        decodeRow.spacing = 10
 
         let stack = NSStackView(views: [
             title, subtitle, imageView, encodeRow, diagnosticsButton,
-            revealDiagnosticsButton, decodeButton, progress, status,
+            revealDiagnosticsButton, decodeRow, progress, status,
         ])
         stack.orientation = .vertical
         stack.alignment = .centerX
@@ -157,6 +166,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.window?.makeKeyAndOrderFront(nil)
     }
 
+    @objc private func revealOutput() {
+        guard let lastOutput else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([lastOutput])
+    }
+
     private func encode(
         _ input: URL, to output: URL, preview: URL,
         diagnostics: URL?, preset: RatePreset
@@ -177,15 +191,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 imageView.image = NSImage(contentsOf: preview)
                 let kind = measurement.firstRun ? "First" : "Repeat"
                 var message = String(
-                    format: "%@ encode: %.3f s • %.3f bpp • %d bytes\nVerification decode: %.3f s\nSaved %@",
+                    format: "%@ encode: %.3f s • %.3f bpp • %d bytes\nVerification decode: %.3f s • %.2f dB RGB PSNR\nCompressed .bits: %@\nPreview PNG: %@",
                     kind, measurement.encodeSeconds, measurement.bitsPerPixel,
-                    measurement.bytes, measurement.decodeSeconds, output.path
+                    measurement.bytes, measurement.decodeSeconds, measurement.psnr,
+                    output.path, preview.path
                 )
                 if let diagnostics {
                     diagnosticsDirectory = diagnostics
                     revealDiagnosticsButton.isEnabled = true
                     message += "\nVisualizations: \(diagnostics.path)"
                 }
+                lastOutput = output
+                revealOutputButton.isEnabled = true
                 status.stringValue = message
             } catch {
                 report(error, operation: "encode")
@@ -206,6 +223,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                     format: "%@ decode: %.3f s (%d×%d)\nSaved %@",
                     kind, measurement.seconds, measurement.width, measurement.height, output.path
                 )
+                lastOutput = output
+                revealOutputButton.isEnabled = true
             } catch {
                 report(error, operation: "decode")
             }
@@ -242,6 +261,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         presetPicker.isEnabled = !busy
         diagnosticsButton.isEnabled = !busy
         revealDiagnosticsButton.isEnabled = !busy && diagnosticsDirectory != nil
+        revealOutputButton.isEnabled = !busy && lastOutput != nil
         if busy { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
         if let message {
             status.textColor = .secondaryLabelColor
@@ -464,6 +484,7 @@ private struct EncodeMeasurement: Sendable {
     let decodeSeconds: Double
     let bytes: Int
     let bitsPerPixel: Double
+    let psnr: Double
     let firstRun: Bool
 }
 
@@ -523,8 +544,18 @@ private actor BenchmarkCodec {
             decodeSeconds: decodeSeconds,
             bytes: encoded.data.count,
             bitsPerPixel: Double(encoded.data.count * 8) / Double(image.width * image.height),
+            psnr: Self.psnr(reference: image.rgb, reconstructed: reconstructed.rgb),
             firstRun: encodedModels.insert(preset.model).inserted
         )
+    }
+
+    private static func psnr(reference: [UInt8], reconstructed: [UInt8]) -> Double {
+        let squaredError = zip(reference, reconstructed).reduce(0.0) { total, pair in
+            let error = Double(Int(pair.0) - Int(pair.1))
+            return total + error * error
+        }
+        let mse = squaredError / Double(reference.count)
+        return mse == 0 ? .infinity : 10 * log10(255 * 255 / mse)
     }
 
     private static func seconds(_ duration: Duration) -> Double {
