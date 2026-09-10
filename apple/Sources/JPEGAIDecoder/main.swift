@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import JPEGAI
 import UniformTypeIdentifiers
 
@@ -67,7 +68,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         progress.isDisplayedWhenStopped = false
         status.alignment = .center
         status.textColor = .secondaryLabelColor
-        status.maximumNumberOfLines = 5
+        status.maximumNumberOfLines = 8
 
         let encodeRow = NSStackView(views: [encodeButton, presetPicker])
         encodeRow.orientation = .horizontal
@@ -101,7 +102,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         ])
 
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 700),
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 860),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -190,12 +191,23 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
                 imageView.image = NSImage(contentsOf: preview)
                 let kind = measurement.firstRun ? "First" : "Repeat"
+                let aiSize = Self.sizeLabel(measurement.bytes)
+                let jpegSize = Self.sizeLabel(measurement.jpegBytes)
+                let sourceSize = Self.sizeLabel(measurement.sourceBytes)
+                let previewSize = Self.sizeLabel(measurement.previewBytes)
                 var message = String(
-                    format: "%@ encode: %.3f s • %.3f bpp • %d bytes\nVerification decode: %.3f s • %.2f dB RGB PSNR\nCompressed .bits: %@\nPreview PNG: %@",
-                    kind, measurement.encodeSeconds, measurement.bitsPerPixel,
-                    measurement.bytes, measurement.decodeSeconds, measurement.psnr,
-                    output.path, preview.path
+                    format: "%@ JPEG AI encode: %.3f s • %.3f bpp • %@\nVerification decode: %.3f s • %.2f dB RGB PSNR",
+                    kind, measurement.encodeSeconds, measurement.bitsPerPixel, aiSize,
+                    measurement.decodeSeconds, measurement.psnr
                 )
+                message += "\nSource PNG: \(sourceSize)"
+                message += String(
+                    format: "\nTraditional JPEG (macOS quality %.2f): %@",
+                    measurement.jpegQuality, jpegSize
+                )
+                message += "\nCompressed JPEG AI .bits: \(aiSize) — actual payload"
+                message += "\nDecoded PNG: \(previewSize) — lossless preview, not payload"
+                message += "\nSaved .bits: \(output.path)"
                 if let diagnostics {
                     diagnosticsDirectory = diagnostics
                     revealDiagnosticsButton.isEnabled = true
@@ -306,6 +318,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
             if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
             suffix += 1
         }
+    }
+
+    private static func sizeLabel(_ bytes: Int) -> String {
+        let readable = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        return "\(readable) (\(bytes.formatted()) bytes)"
     }
 }
 
@@ -483,6 +500,10 @@ private struct EncodeMeasurement: Sendable {
     let encodeSeconds: Double
     let decodeSeconds: Double
     let bytes: Int
+    let sourceBytes: Int
+    let previewBytes: Int
+    let jpegBytes: Int
+    let jpegQuality: Double
     let bitsPerPixel: Double
     let psnr: Double
     let firstRun: Bool
@@ -518,6 +539,7 @@ private actor BenchmarkCodec {
         progress: @escaping @Sendable (JPEGAIEncodingStage) async -> Void
     ) async throws -> EncodeMeasurement {
         let image = try JPEGAIDecodedImage.readPNG(from: input)
+        let sourceBytes = try Data(contentsOf: input, options: .mappedIfSafe).count
         let started = ContinuousClock.now
         let encoded = try await image.encodeJPEGAI(
             tablesDirectory: tables, models: models,
@@ -538,15 +560,50 @@ private actor BenchmarkCodec {
         let reconstructed = try await stream.decodeImage(tablesDirectory: tables, models: models)
         let decodeSeconds = Self.seconds(decodeStarted.duration(to: .now))
         try reconstructed.writePNG(to: preview)
+        let previewBytes = try Data(contentsOf: preview, options: .mappedIfSafe).count
+        let jpegQuality = 0.70
+        let jpegBytes = try Self.jpegSize(image, quality: jpegQuality)
         decodedModels.insert(preset.model)
         return EncodeMeasurement(
             encodeSeconds: encodeSeconds,
             decodeSeconds: decodeSeconds,
             bytes: encoded.data.count,
+            sourceBytes: sourceBytes,
+            previewBytes: previewBytes,
+            jpegBytes: jpegBytes,
+            jpegQuality: jpegQuality,
             bitsPerPixel: Double(encoded.data.count * 8) / Double(image.width * image.height),
             psnr: Self.psnr(reference: image.rgb, reconstructed: reconstructed.rgb),
             firstRun: encodedModels.insert(preset.model).inserted
         )
+    }
+
+    private static func jpegSize(_ image: JPEGAIDecodedImage, quality: Double) throws -> Int {
+        guard let provider = CGDataProvider(data: Data(image.rgb) as CFData),
+              let cgImage = CGImage(
+                width: image.width, height: image.height,
+                bitsPerComponent: 8, bitsPerPixel: 24, bytesPerRow: image.width * 3,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: false,
+                intent: .defaultIntent
+              ) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data, UTType.jpeg.identifier as CFString, 1, nil
+        ) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        CGImageDestinationAddImage(
+            destination, cgImage,
+            [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary
+        )
+        guard CGImageDestinationFinalize(destination) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        return data.length
     }
 
     private static func psnr(reference: [UInt8], reconstructed: [UInt8]) -> Double {

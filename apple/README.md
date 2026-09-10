@@ -52,7 +52,10 @@ open dist/JPEGAIDecoder.app
 ```
 
 The app can encode a PNG or decode a `.bits` file and displays the reconstructed
-image and first/repeat timing. During encoding it reports the active model or
+image and first/repeat timing. Its result separates the source PNG, the actual
+JPEG AI `.bits` payload, a native macOS JPEG-at-quality-0.70 baseline, and the
+lossless decoded PNG preview. A preview can be larger than the source PNG; it is
+not the compressed payload. During encoding the app reports the active model or
 codec stage. Leave **Export y/z inference visualizations** selected, then choose
 **View Inference Steps** to browse the input luma, every learned `y` and rounded
 `z` channel, energy maps, entropy-mask density, and quantized context residual
