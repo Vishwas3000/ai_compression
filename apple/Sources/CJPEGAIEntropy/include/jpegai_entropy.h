@@ -43,6 +43,40 @@ extern "C" {
 #endif
 
 typedef struct JPEGAIANSDecoder JPEGAIANSDecoder;
+typedef struct JPEGAIANSEncoder JPEGAIANSEncoder;
+
+JPEGAIANSEncoder *jpegai_ans_encoder_create(size_t capacity);
+void jpegai_ans_encoder_destroy(JPEGAIANSEncoder *encoder);
+
+int jpegai_ans_encoder_set_sgm_tables(
+    JPEGAIANSEncoder *encoder,
+    const uint32_t *transitions,
+    const uint8_t *bounds,
+    const uint8_t *state_maps,
+    size_t distribution_count
+);
+
+int jpegai_ans_encoder_encode_sgm(
+    JPEGAIANSEncoder *encoder,
+    const uint8_t *sigma_indexes,
+    int16_t *values,
+    const uint8_t *masks,
+    size_t count
+);
+
+int jpegai_ans_encoder_encode_factorized(
+    JPEGAIANSEncoder *encoder,
+    const uint8_t *cdfs,
+    uint8_t *values,
+    size_t channels,
+    size_t values_per_channel
+);
+
+ptrdiff_t jpegai_ans_encoder_finish(
+    JPEGAIANSEncoder *encoder,
+    uint8_t *output,
+    size_t output_capacity
+);
 
 JPEGAIANSDecoder *jpegai_ans_decoder_create(const uint8_t *bytes, size_t size);
 void jpegai_ans_decoder_destroy(JPEGAIANSDecoder *decoder);

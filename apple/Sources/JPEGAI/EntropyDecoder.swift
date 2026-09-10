@@ -68,4 +68,5 @@ public enum JPEGAIEntropyError: Error {
     case invalidInput
     case invalidTables
     case decodeFailed
+    case encodeFailed
 }

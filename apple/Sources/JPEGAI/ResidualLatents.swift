@@ -103,7 +103,7 @@ public struct JPEGAIDecodedImage: Sendable {
 @available(macOS 13, iOS 16, *)
 public extension JPEGAIBitstream {
     func decodeImage(
-        tablesDirectory: URL, models: JPEGAICoreMLModelSet
+        tablesDirectory: URL, models: isolated JPEGAICoreMLModelSet
     ) async throws -> JPEGAIDecodedImage {
         let header = try pictureHeader
         let hyper = try decodeHyperLatents(
@@ -123,7 +123,7 @@ public extension JPEGAIBitstream {
     func decodeResidualLatents(
         hyper: JPEGAIHyperLatents,
         tables: JPEGAIResidualTables,
-        models: JPEGAICoreMLModelSet
+        models: isolated JPEGAICoreMLModelSet
     ) async throws -> JPEGAIResidualLatents {
         let header = try pictureHeader
         let height = (header.codedHeight + 15) / 16
@@ -184,7 +184,7 @@ public extension JPEGAIBitstream {
         hyper: JPEGAIHyperLatents,
         residuals: JPEGAIResidualLatents,
         tables: JPEGAIResidualTables,
-        models: JPEGAICoreMLModelSet
+        models: isolated JPEGAICoreMLModelSet
     ) async throws -> JPEGAIDecodedImage {
         let header = try pictureHeader
         guard header.codedChromaSubsampling == (1, 1),

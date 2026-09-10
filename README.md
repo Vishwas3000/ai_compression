@@ -88,10 +88,10 @@ For publishable runs, use a fixed lossless dataset, record the JPEG AI source
 commit and model/checkpoint, keep the same machine and thread settings, and
 report results across multiple operating points.
 
-## Native Apple decoder
+## Native Apple codec
 
-[`apple/`](apple/) contains the macOS/iOS decoder work. It now decodes an
-untiled 4:4:4 simple-profile codestream through native entropy decoding and
-Core ML reconstruction to an RGB PNG. See [`apple/README.md`](apple/README.md)
-for the command-line decoder, double-clickable macOS app, reproducible model
-conversion, validation, and current profile limits.
+[`apple/`](apple/) contains the macOS/iOS codec work. It encodes PNGs and
+decodes untiled 4:4:4 simple-profile codestreams using native me-tANS plus Core
+ML. Its app reports first/repeat timing and can export real `y`/`z` activation
+maps from an encode. See [`apple/README.md`](apple/README.md) for the CLI,
+double-clickable macOS app, model conversion, validation, and current limits.

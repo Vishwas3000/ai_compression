@@ -7,5 +7,7 @@ data/
 results/
 runs/
 apple/.build/
+apple/.swiftpm/
 apple/Models/
 apple/dist/
+blog/.env

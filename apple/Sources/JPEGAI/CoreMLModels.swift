@@ -3,7 +3,7 @@ import CoreML
 import Foundation
 
 @available(macOS 13, iOS 16, *)
-public final class JPEGAICoreMLModelSet {
+public actor JPEGAICoreMLModelSet {
     private let directory: URL
     private let configuration: MLModelConfiguration
     private var loaded: [URL: MLModel] = [:]

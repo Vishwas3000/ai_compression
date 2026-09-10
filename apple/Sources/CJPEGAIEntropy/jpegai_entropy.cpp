@@ -25,6 +25,268 @@ uint64_t load64(const uint8_t *bytes) {
     return value;
 }
 
+void store64(uint8_t *bytes, uint64_t value) {
+    std::memcpy(bytes, &value, sizeof(value));
+}
+
+struct EncodeBitStream {
+    uint8_t *begin = nullptr;
+    uint8_t *current = nullptr;
+    uint8_t *limit = nullptr;
+    uint64_t head = 0;
+    unsigned bitPosition = 0;
+    uint8_t state1 = 0;
+    uint8_t state2 = 0;
+
+    void write(uint64_t value, unsigned count) {
+        if (count > 32 || bitPosition + count > 63) {
+            throw std::runtime_error("entropy stream overflow");
+        }
+        head |= value << bitPosition;
+        bitPosition += count;
+    }
+
+    void flush() {
+        if (current > limit) throw std::runtime_error("entropy stream overflow");
+        store64(current, head);
+        const size_t bytes = bitPosition >> 3U;
+        if (bytes > static_cast<size_t>(limit - current)) {
+            throw std::runtime_error("entropy stream overflow");
+        }
+        current += bytes;
+        head >>= bitPosition & ~7U;
+        bitPosition &= 7U;
+    }
+
+    size_t closeWithStates() {
+        write(65536U | (static_cast<uint64_t>(state1) << 8U) | state2, 17);
+        if (current > limit) throw std::runtime_error("entropy stream overflow");
+        store64(current, head);
+        const size_t size = static_cast<size_t>(current - begin) + ((bitPosition + 7U) >> 3U);
+        if (size > static_cast<size_t>(limit - begin)) {
+            throw std::runtime_error("entropy stream overflow");
+        }
+        return size;
+    }
+};
+
+class Encoder {
+public:
+    explicit Encoder(size_t capacity) : memory_(capacity + 8, 0), capacity_(capacity) {
+        if (capacity == 0) throw std::invalid_argument("empty entropy buffer");
+        stream_.begin = memory_.data();
+        stream_.current = memory_.data();
+        stream_.limit = memory_.data() + capacity;
+        int bits = 1;
+        for (int probability = 255; probability > 0; --probability) {
+            if ((probability << bits) < 256) ++bits;
+            deltaBits_[probability] = static_cast<uint16_t>(
+                (bits << 8) - (probability << bits) + 256
+            );
+        }
+    }
+
+    void setSGMTables(
+        const uint32_t *transitions, const uint8_t *bounds,
+        const uint8_t *stateMaps, size_t count
+    ) {
+        if (transitions == nullptr || bounds == nullptr || stateMaps == nullptr ||
+            count == 0 || count > kDistributionCount) {
+            throw std::invalid_argument("invalid SGM tables");
+        }
+        transitionCount_ = count;
+        yTransitions_.assign(transitions, transitions + count * kStateCount);
+        yStateMaps_.assign(stateMaps, stateMaps + count * kStateCount);
+        std::copy(bounds, bounds + count, yBounds_.begin());
+        for (size_t i = 0; i < count; ++i) {
+            if (yBounds_[i] == 0 || yBounds_[i] > 128) {
+                throw std::invalid_argument("invalid SGM bound");
+            }
+        }
+    }
+
+    void encodeSGM(
+        const uint8_t *indexes, int16_t *values, const uint8_t *masks, size_t count
+    ) {
+        ensureOpen();
+        if (indexes == nullptr || values == nullptr || masks == nullptr || transitionCount_ == 0) {
+            throw std::invalid_argument("invalid SGM input");
+        }
+        for (size_t i = 0; i < count; ++i) {
+            if (masks[i] && indexes[i] >= transitionCount_) {
+                throw std::invalid_argument("SGM distribution index out of range");
+            }
+        }
+
+        size_t index = count;
+        if (index & 1U) {
+            --index;
+            if (masks[index]) {
+                encodeYOutbound(indexes, values, index);
+                encodeYInbound(stream_.state1, indexes, values, index);
+            }
+            stream_.flush();
+        }
+        if (index & 2U) {
+            index -= 2;
+            if (masks[index + 1]) {
+                encodeYOutbound(indexes, values, index + 1);
+                encodeYInbound(stream_.state2, indexes, values, index + 1);
+            }
+            if (masks[index]) {
+                encodeYOutbound(indexes, values, index);
+                encodeYInbound(stream_.state1, indexes, values, index);
+            }
+            stream_.flush();
+        }
+        while (index != 0) {
+            index -= 4;
+            for (size_t i = index + 4; i-- > index;) {
+                if (masks[i]) encodeYOutbound(indexes, values, i);
+            }
+            if (masks[index + 3]) encodeYInbound(stream_.state2, indexes, values, index + 3);
+            if (masks[index + 2]) encodeYInbound(stream_.state1, indexes, values, index + 2);
+            if (masks[index + 1]) encodeYInbound(stream_.state2, indexes, values, index + 1);
+            if (masks[index]) encodeYInbound(stream_.state1, indexes, values, index);
+            stream_.flush();
+        }
+    }
+
+    void encodeFactorized(
+        const uint8_t *cdfs, uint8_t *values, size_t channels, size_t count
+    ) {
+        ensureOpen();
+        if (cdfs == nullptr || values == nullptr || channels == 0 || count == 0) {
+            throw std::invalid_argument("invalid factorized input");
+        }
+        for (size_t channel = channels; channel-- > 0;) {
+            const uint8_t *cdf = cdfs + channel * kMaxZ;
+            uint8_t previous = 0;
+            for (size_t i = 0; i < kMaxZ; ++i) {
+                if (cdf[i] < previous) throw std::invalid_argument("invalid factorized CDF");
+                previous = cdf[i];
+            }
+            if (previous != 255) throw std::invalid_argument("incomplete factorized CDF");
+            encodeFactorizedRow(cdf, values + channel * count, count);
+        }
+    }
+
+    size_t finish() {
+        ensureOpen();
+        finished_ = true;
+        return stream_.closeWithStates();
+    }
+
+    const uint8_t *bytes() const { return memory_.data(); }
+
+private:
+    void ensureOpen() const {
+        if (finished_) throw std::runtime_error("entropy encoder is closed");
+    }
+
+    static void encodeWithTransition(
+        EncodeBitStream &stream, uint8_t &state, uint32_t transition
+    ) {
+        const uint32_t bits = (state + (transition >> 16U)) >> 8U;
+        const uint32_t mask = bits == 0 ? 0 : (1U << bits) - 1U;
+        stream.write(state & mask, bits);
+        state = static_cast<uint8_t>(((state | 256U) >> bits) + transition);
+    }
+
+    void encodeYInbound(
+        uint8_t &state, const uint8_t *indexes, const int16_t *values, size_t index
+    ) {
+        const int value = values[index];
+        if (value < -128 || value > 127) throw std::runtime_error("invalid SGM symbol");
+        const size_t table = indexes[index] * kStateCount;
+        encodeWithTransition(stream_, state, yTransitions_[table + value + 128]);
+        state = yStateMaps_[table + state];
+    }
+
+    void encodeYOutbound(const uint8_t *indexes, int16_t *values, size_t index) {
+        const int value = values[index];
+        const int bound = yBounds_[indexes[index]];
+        if (value >= bound || value <= -bound) {
+            const uint64_t coded = value >= bound
+                ? static_cast<uint64_t>(value - bound) << 1U
+                : (static_cast<uint64_t>(-static_cast<int32_t>(value) - bound) << 1U) | 1U;
+            stream_.head |= coded << stream_.bitPosition;
+            if (coded >= 8) {
+                stream_.bitPosition += 17;
+            } else {
+                stream_.head |= 1ULL << (stream_.bitPosition + 3U);
+                stream_.bitPosition += 4;
+            }
+            stream_.flush();
+            values[index] = static_cast<int16_t>(-bound);
+        }
+    }
+
+    void setZDistribution(const uint8_t *cdf) {
+        int cumulative = 0;
+        for (size_t symbol = 0; symbol < kMaxZ; ++symbol) {
+            const int probability = cdf[symbol] - cumulative;
+            zTransitions_[symbol] = probability
+                ? (static_cast<uint32_t>(deltaBits_[probability]) << 16U) |
+                    static_cast<uint8_t>(cumulative - probability)
+                : 0;
+            cumulative = cdf[symbol];
+        }
+        zTransitions_[kMaxZ] = (static_cast<uint32_t>(deltaBits_[1]) << 16U) | 254U;
+    }
+
+    void encodeZInbound(uint8_t &state, uint8_t *values, size_t index) {
+        encodeWithTransition(stream_, state, zTransitions_[values[index]]);
+    }
+
+    void encodeZOutbound(uint8_t *values, size_t index) {
+        if (values[index] > kMaxZ) throw std::invalid_argument("factorized symbol out of range");
+        if (zTransitions_[values[index]] == 0) {
+            stream_.write(values[index], 6);
+            values[index] = kMaxZ;
+        }
+    }
+
+    void encodeFactorizedRow(const uint8_t *cdf, uint8_t *values, size_t count) {
+        setZDistribution(cdf);
+        size_t length = count;
+        if (length & 1U) {
+            --length;
+            encodeZOutbound(values, length);
+            encodeZInbound(stream_.state1, values, length);
+        }
+        if (length & 2U) {
+            --length;
+            encodeZOutbound(values, length);
+            encodeZInbound(stream_.state2, values, length);
+            --length;
+            encodeZOutbound(values, length);
+            encodeZInbound(stream_.state1, values, length);
+        }
+        stream_.flush();
+        while (length != 0) {
+            length -= 4;
+            for (size_t i = length + 4; i-- > length;) encodeZOutbound(values, i);
+            encodeZInbound(stream_.state2, values, length + 3);
+            encodeZInbound(stream_.state1, values, length + 2);
+            encodeZInbound(stream_.state2, values, length + 1);
+            encodeZInbound(stream_.state1, values, length);
+            stream_.flush();
+        }
+    }
+
+    std::vector<uint8_t> memory_;
+    size_t capacity_;
+    EncodeBitStream stream_;
+    bool finished_ = false;
+    size_t transitionCount_ = 0;
+    std::vector<uint32_t> yTransitions_;
+    std::vector<uint8_t> yStateMaps_;
+    std::array<uint8_t, kDistributionCount> yBounds_{};
+    std::array<uint32_t, kMaxZ + 1> zTransitions_{};
+    std::array<uint16_t, kStateCount> deltaBits_{};
+};
+
 struct BitStream {
     const uint8_t *begin = nullptr;
     const uint8_t *end = nullptr;
@@ -219,6 +481,70 @@ private:
 } // namespace
 
 struct JPEGAIANSDecoder { Decoder decoder; };
+struct JPEGAIANSEncoder { Encoder encoder; };
+
+extern "C" JPEGAIANSEncoder *jpegai_ans_encoder_create(size_t capacity) {
+    try {
+        return new JPEGAIANSEncoder{Encoder(capacity)};
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+extern "C" void jpegai_ans_encoder_destroy(JPEGAIANSEncoder *encoder) { delete encoder; }
+
+extern "C" int jpegai_ans_encoder_set_sgm_tables(
+    JPEGAIANSEncoder *encoder, const uint32_t *transitions, const uint8_t *bounds,
+    const uint8_t *stateMaps, size_t count
+) {
+    if (encoder == nullptr) return -1;
+    try {
+        encoder->encoder.setSGMTables(transitions, bounds, stateMaps, count);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+extern "C" int jpegai_ans_encoder_encode_sgm(
+    JPEGAIANSEncoder *encoder, const uint8_t *indexes, int16_t *values,
+    const uint8_t *masks, size_t count
+) {
+    if (encoder == nullptr) return -1;
+    try {
+        encoder->encoder.encodeSGM(indexes, values, masks, count);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+extern "C" int jpegai_ans_encoder_encode_factorized(
+    JPEGAIANSEncoder *encoder, const uint8_t *cdfs, uint8_t *values,
+    size_t channels, size_t valuesPerChannel
+) {
+    if (encoder == nullptr) return -1;
+    try {
+        encoder->encoder.encodeFactorized(cdfs, values, channels, valuesPerChannel);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+extern "C" ptrdiff_t jpegai_ans_encoder_finish(
+    JPEGAIANSEncoder *encoder, uint8_t *output, size_t outputCapacity
+) {
+    if (encoder == nullptr || output == nullptr) return -1;
+    try {
+        const size_t size = encoder->encoder.finish();
+        if (size > outputCapacity || size > static_cast<size_t>(PTRDIFF_MAX)) return -1;
+        std::memcpy(output, encoder->encoder.bytes(), size);
+        return static_cast<ptrdiff_t>(size);
+    } catch (...) {
+        return -1;
+    }
+}
 
 extern "C" JPEGAIANSDecoder *jpegai_ans_decoder_create(const uint8_t *bytes, size_t size) {
     try {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert the decoder-only JPEG AI simple-profile model set to Core ML."""
+"""Convert the JPEG AI simple-profile encoder and decoder models to Core ML."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ def main() -> None:
         for component in ("model_y", "model_uv"):
             source = args.onnx_root / f"tools_{tool}" / component
             paths = [
+                source / "analysis.onnx",
+                source / "common_modules" / "hyper_encoder.onnx",
                 source / "common_modules" / "hyper_decoder.onnx",
                 source / "common_modules" / "hyper_scale_decoder.onnx",
                 source / "synthesis.onnx",
@@ -34,7 +36,8 @@ def main() -> None:
                     continue
                 reference = args.references / relative.with_suffix(".npz") if args.references else None
                 print(f"Converting {relative}", flush=True)
-                convert_model(path, output, reference)
+                sample_size = 64 if path.name == "analysis.onnx" else 8
+                convert_model(path, output, reference, sample_size)
 
 
 if __name__ == "__main__":
