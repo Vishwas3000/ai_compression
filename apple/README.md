@@ -21,6 +21,27 @@ cd apple
 swift test
 ```
 
+## Homebrew CLI
+
+On macOS 13 or newer, install the native command and its Core ML models from
+the project tap:
+
+```bash
+brew install vishwas3000/tap/jpeg-ai-apple
+```
+
+Then encode and decode without supplying internal model paths:
+
+```bash
+jpeg-ai encode INPUT.png OUTPUT.bits --preset 75
+jpeg-ai decode OUTPUT.bits OUTPUT.png
+```
+
+Available presets are `12`, `25`, `50`, `75` (the default), and `100`. Add
+`--visualizations DIR` to an encode to export the real `y`/`z` inference maps.
+This is an experimental simple-profile codec, not a claim of complete JPEG AI
+conformance.
+
 Encode a PNG, optionally exporting the actual inference tensors produced by
 Core ML:
 

@@ -114,3 +114,11 @@ decodes untiled 4:4:4 simple-profile codestreams using native me-tANS plus Core
 ML. Its app reports first/repeat timing and can export real `y`/`z` activation
 maps from an encode. See [`apple/README.md`](apple/README.md) for the CLI,
 double-clickable macOS app, model conversion, validation, and current limits.
+
+Apple Silicon users can install the native encoder and decoder with Homebrew:
+
+```bash
+brew install vishwas3000/tap/jpeg-ai-apple
+jpeg-ai encode input.png output.bits --preset 75
+jpeg-ai decode output.bits reconstructed.png
+```
