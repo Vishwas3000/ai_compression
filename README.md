@@ -122,3 +122,10 @@ brew install vishwas3000/tap/jpeg-ai-apple
 jpeg-ai encode input.png output.bits --preset 75
 jpeg-ai decode output.bits reconstructed.png
 ```
+
+## License
+
+This project is MIT licensed. The native codec also contains work derived from
+the official JPEG AI reference software under its BSD license; see
+[`apple/THIRD_PARTY_NOTICES.md`](apple/THIRD_PARTY_NOTICES.md). Neither license
+grants patent rights.

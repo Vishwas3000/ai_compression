@@ -21,8 +21,9 @@ trap 'rm -rf -- "$staging"' EXIT HUP INT TERM
 mkdir -p "$staging/Tables" "$staging/Models" "$root/dist"
 ditto "$root/dist/JPEGAIDecoder.app/Contents/Resources/Tables" "$staging/Tables"
 ditto "$root/dist/JPEGAIDecoder.app/Contents/Resources/apple-coreml-simple" "$staging/Models"
-cp "$root/THIRD_PARTY_NOTICES.md" "$staging/"
-COPYFILE_DISABLE=1 tar -czf "$archive" -C "$staging" Tables Models THIRD_PARTY_NOTICES.md
+cp "$root/../LICENSE" "$root/THIRD_PARTY_NOTICES.md" "$staging/"
+COPYFILE_DISABLE=1 tar -czf "$archive" -C "$staging" \
+    Tables Models LICENSE THIRD_PARTY_NOTICES.md
 
 echo "$archive"
 shasum -a 256 "$archive"
